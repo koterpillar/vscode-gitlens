@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixes REST version and work item route failures on TFS 2018 for native issue, pull request and reviewer-group reads. Work item categories use explicit server metadata; unavailable categories keep list results partial and exact state-filtered searches unsupported ([#6048](https://github.com/gitkraken/vscode-gitlens/issues/6048)).
+
+## [0.15.5] - 2026-10-22
+
 ### Added
 
 - Adds optional `refs` and `options.configConfinedToRefs` to `GitServiceHooks.repository.onChanged`: `refs` are the full ref names a write created, moved or deleted, and a ref kind with names among them is fully described by them, so a host can skip work for refs it doesn't follow; `configConfinedToRefs` says the write changed `.git/config` only in the `branch.<name>` sections of the local branches `refs` names. Siblings sharing the repository hear the names and the flag with the shared kinds. Branch create, delete, rename and upstream changes, `checkout -b`, a worktree's new branch, a commit (its branch, read from the worktree's `HEAD` before and after the run, and named only when both agree) and stash writes (`refs/stash`, by a pop only when it dropped the entry) name their refs; a host that ignores them treats every kind as unnamed, as before (git, git-cli)
@@ -16,7 +22,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 ### Fixed
 
-- Fixes REST version and work item route failures on TFS 2018 for native issue, pull request and reviewer-group reads. Work item categories use explicit server metadata; unavailable categories keep list results partial and exact state-filtered searches unsupported ([#6048](https://github.com/gitkraken/vscode-gitlens/issues/6048)).
+- Fixes worktree summaries keeping an outdated ahead-of-base target after checkout-specific Git configuration changes. Each checkout now compares its effective configuration, including branch-conditional includes, with the configuration used for its current base.
 - Fixes a fetch announcing `remotes` to every worktree of the repository, and resetting the branch and tag caches, whether or not anything moved, so each worktree summary re-read its base after every fetch: in a Kepler daemon with ~60 worktrees one task launch cost ~490 git processes. A fetch now compares the refs it can write (its refspecs' destinations, the fetched remotes' configured destinations, symref targets included, and tags) before and after it runs, announces nothing when none moved, and otherwise names exactly what moved; a snapshot it can't read falls back to the previous announcement (git-cli)
 - Fixes deleting, creating or renaming a branch making every worktree of the repository re-read its base, since the write's `.git/config` change and the watcher's later report of it reached every subscriber; one task removal cost ~460 git processes over ~60 worktrees (git, git-cli)
 
@@ -844,7 +850,8 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 - Initial release. Bundles `@gitlens/utils`, `@gitlens/git`, `@gitlens/git-cli`, `@gitlens/ai`, and `@gitlens/git-github` into a single core npm package with subpath exports.
 
-[unreleased]: https://github.com/gitkraken/vscode-gitlens/compare/releases/core/v0.15.4...HEAD
+[unreleased]: https://github.com/gitkraken/vscode-gitlens/compare/releases/core/v0.15.5...HEAD
+[0.15.5]: https://github.com/gitkraken/vscode-gitlens/compare/releases/core/v0.15.4...gitkraken:releases/core/v0.15.5
 [0.15.4]: https://github.com/gitkraken/vscode-gitlens/compare/releases/core/v0.15.3...gitkraken:releases/core/v0.15.4
 [0.15.3]: https://github.com/gitkraken/vscode-gitlens/compare/releases/core/v0.15.2...gitkraken:releases/core/v0.15.3
 [0.15.2]: https://github.com/gitkraken/vscode-gitlens/compare/releases/core/v0.15.1...gitkraken:releases/core/v0.15.2

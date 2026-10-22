@@ -5,9 +5,11 @@ import { mixinDisposable } from '@gitlens/utils/disposable.js';
 import { Emitter } from '@gitlens/utils/event.js';
 import { fileUri, getRepositoryKey } from '@gitlens/utils/uri.js';
 import type { MergeTargetsChangeEvent } from '../../cache.js';
+import { Cache } from '../../cache.js';
 import type { GitDir, RepositoryChange } from '../../models/repository.js';
 import type { AheadOfBaseTier } from '../../providers/branches.js';
 import type { RepositoryService } from '../../repositoryService.js';
+import type { GitResult } from '../../run.types.js';
 import type {
 	FileWatcher,
 	FileWatcherOptions,
@@ -868,7 +870,7 @@ describe('WorktreeSummaryService', () => {
 
 			await h.service.getSummary(repoPath);
 			assert.strictEqual(h.repo.counts.branch, 2, 'one-off reads are not cached');
-			assert.strictEqual(h.repo.configKeyReads, 0, 'one-off reads retain no config snapshot');
+			assert.strictEqual(h.repo.configKeyReads, 0, 'one-off reads do not retain config snapshots');
 		});
 
 		it('rejects a one-off read for an unknown repository', async () => {
@@ -971,7 +973,7 @@ describe('WorktreeSummaryService', () => {
 			for (let i = 0; i < 2; i++) {
 				assert.deepStrictEqual(await readsAfter(h, () => h.push(['heads'], 'refs/heads/develop')), onlyBase);
 			}
-			assert.strictEqual(h.repo.configKeyReads, 1, 'dependent-ref movement retains the config snapshot');
+			assert.strictEqual(h.repo.configKeyReads, 3, 'each new base is paired with its config snapshot');
 		});
 
 		it('runs base when a ref a no-base answer depends on moves, and picks up the base it finds', async () => {
@@ -1391,7 +1393,11 @@ describe('WorktreeSummaryService', () => {
 			h.repo.hold();
 			h.push(['heads'], 'refs/heads/develop');
 			await waitFor(() => h.repo.counts.base > before.base);
-			assert.strictEqual(h.repo.configKeyReads, configKeyReads, 'ref-only reads retain the config snapshot');
+			assert.strictEqual(
+				h.repo.configKeyReads,
+				configKeyReads + 1,
+				'the held base captures its config before reading',
+			);
 
 			h.repo.state.configKey = 'config-v2';
 			h.push(['config']);
@@ -1401,8 +1407,119 @@ describe('WorktreeSummaryService', () => {
 			h.repo.release();
 			await waitFor(() => h.repo.counts.base === before.base + 2);
 			await h.service.getSummary(repoPath);
-			assert.strictEqual(h.repo.configKeyReads, configKeyReads + 1, 'queued config refresh snapshots once');
+			assert.strictEqual(
+				h.repo.configKeyReads,
+				configKeyReads + 2,
+				'the queued config refresh captures fresh inputs',
+			);
 			assert.deepStrictEqual(await readsAfter(h, () => h.push(['config'])), onlyBranch);
+		});
+
+		it('a reopened main summary cannot pair fresh config with a pre-close pending base command', async () => {
+			using cache = new Cache();
+			const h = createHarness();
+			cache.registerRepoPath(fileUri(repoPath), { uri: fileUri(`${repoPath}/.git`) });
+			cache.registerRepoPath(fileUri('/peer'), {
+				uri: fileUri(`${repoPath}/.git/worktrees/peer`),
+				commonUri: fileUri(`${repoPath}/.git`),
+			});
+			const command = 'git rev-parse main@{u}';
+			const fresh: GitResult = {
+				stdout: 'alternate/main',
+				stderr: '',
+				exitCode: 0,
+				completion: { status: 'exited', code: 0 },
+			};
+			let releaseKey!: (value: string) => void;
+			let releaseCommand!: (value: GitResult) => void;
+			const oldKey = cache.getAheadOfBaseConfigKey(
+				repoPath,
+				() =>
+					new Promise<string>(resolve => {
+						releaseKey = resolve;
+					}),
+			);
+			const oldCommand = cache.gitResults.getOrCreate(
+				repoPath,
+				command,
+				() =>
+					new Promise<GitResult>(resolve => {
+						releaseCommand = resolve;
+					}),
+			);
+			h.repo.service.branches.getAheadOfBaseConfigKey = signal =>
+				cache.getAheadOfBaseConfigKey(repoPath, () => 'config-B', signal);
+			let baseReads = 0;
+			h.repo.service.branches.getAheadOfBase = async () => {
+				baseReads++;
+				const result = await cache.gitResults.getOrCreate(repoPath, command, async () => fresh);
+				return {
+					base: {
+						...h.repo.state.base!,
+						ref: result.stdout,
+						ahead: result.stdout === 'alternate/main' ? 1 : 2,
+					},
+					dependsOn: ['refs/heads/main'],
+				};
+			};
+			const oldSubscription = h.service.subscribe(repoPath);
+			await waitFor(() => h.repo.counts.branch === 1);
+			oldSubscription.dispose();
+			cache.unregisterRepoPath(repoPath);
+			cache.registerRepoPath(fileUri(repoPath), { uri: fileUri(`${repoPath}/.git`) });
+			const reopened = h.service.subscribe(repoPath);
+			const summaries: WorktreeSummary[] = [];
+			reopened.onDidChange(value => summaries.push(value));
+			await waitFor(() => baseReads === 1);
+			releaseKey('config-A');
+			releaseCommand({ ...fresh, stdout: 'origin/main' });
+			await Promise.all([oldKey, oldCommand]);
+			assert.strictEqual((await h.service.getSummary(repoPath)).base?.ref, 'alternate/main');
+			assert.strictEqual(reopened.current?.base?.ahead, 1);
+			assert.strictEqual(oldSubscription.current, undefined);
+			cache.onRepositoryChanged(repoPath, ['config']);
+			await readsAfter(h, () => h.push(['config'], false));
+			assert.strictEqual(baseReads, 1, 'equal config retains the correctly paired base');
+			assert.ok(summaries.every(value => value.base?.ref === 'alternate/main'));
+		});
+
+		it('pairs a HEAD-driven base with its config snapshot before a later config change returns to the old key', async () => {
+			const h = createHarness();
+			h.service.subscribe(repoPath);
+			await h.service.getSummary(repoPath);
+			h.repo.state.configKey = 'branch-config-B';
+			h.repo.state.base = { ...h.repo.state.base!, ahead: 9 };
+			await readsAfter(h, () => h.push(['head', 'heads'], 'HEAD'));
+			h.repo.state.configKey = 'config-v1';
+			h.repo.state.base = { ...h.repo.state.base, ahead: 4 };
+			assert.deepStrictEqual(await readsAfter(h, () => h.push(['config'], false)), { ...onlyBranch, base: 1 });
+			assert.strictEqual((await h.service.getSummary(repoPath)).base?.ahead, 4);
+		});
+
+		it('treats a config event during a base read as unknown provenance even when the key returns to its old value', async () => {
+			const h = createHarness();
+			h.service.subscribe(repoPath);
+			await h.service.getSummary(repoPath);
+			const before = h.repo.snapshot();
+			h.repo.hold();
+			h.push(['heads'], 'refs/heads/develop');
+			await waitFor(() => h.repo.counts.base > before.base);
+			h.repo.state.configKey = 'config-v1';
+			h.repo.state.base = { ...h.repo.state.base!, ahead: 8 };
+			const reported = new Promise<void>(resolve => {
+				const listener = h.watchService.onDidChangeRepository(event => {
+					if (!event.changed('config')) return;
+
+					listener.dispose();
+					resolve();
+				});
+			});
+			h.push(['config'], false);
+			await reported;
+			h.repo.release();
+			await waitFor(() => h.repo.counts.base === before.base + 2);
+			await h.service.getSummary(repoPath);
+			assert.deepStrictEqual(await readsAfter(h, () => h.push(['config'], false)), onlyBranch);
 		});
 
 		it('runs everything for head and unknown changes', async () => {
@@ -1414,7 +1531,7 @@ describe('WorktreeSummaryService', () => {
 			for (let i = 0; i < 2; i++) {
 				assert.deepStrictEqual(await readsAfter(h, () => h.push(['head', 'heads'], 'HEAD')), all);
 			}
-			assert.strictEqual(h.repo.configKeyReads, 1, 'HEAD movement retains the config snapshot');
+			assert.strictEqual(h.repo.configKeyReads, 3, 'HEAD-driven base reads capture their effective config');
 			assert.deepStrictEqual(await readsAfter(h, () => h.push(['unknown'])), all);
 		});
 
