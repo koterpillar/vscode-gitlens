@@ -14,7 +14,7 @@ import type { Provider } from '@gitlens/git/models/remoteProvider.js';
 import type { ResourceDescriptor } from '@gitlens/git/models/resourceDescriptor.js';
 import { isTerminalIssueStateCategory } from '@gitlens/git/utils/issue.utils.js';
 import type { IssueEtagFields, PullRequestEtagFields, PullRequestEtagInclude } from '../../models/integration.js';
-import { pullRequestRevision } from '../../models/integration.js';
+import { azureWorkItemDescriptionRule, pullRequestRevision } from '../../models/integration.js';
 import type { ProviderAccount, ProviderIssue } from '../models.js';
 import {
 	fromProviderPullRequestMergeableState,
@@ -22,6 +22,7 @@ import {
 	GitPullRequestMergeableState,
 	GitPullRequestReviewState,
 	GitPullRequestState,
+	toIssueBodyField,
 } from '../models.js';
 import type { ProviderPullRequestReview } from '../pullRequestReviews.js';
 import {
@@ -762,6 +763,7 @@ export function fromAzureWorkItem(
 	htmlFields?: readonly AzureWorkItemHtmlField[],
 ): Issue {
 	const state = workItem.fields['System.State'];
+	const description = getAzureWorkItemDescription(workItem.fields, htmlFields);
 	const closedDate = parseAzureWorkItemDate(workItem.fields['Microsoft.VSTS.Common.ClosedDate']) ?? undefined;
 	const normalizedState = azureWorkItemsStateCategoryToState(stateCategory, closedDate);
 	const assignee = fromAzureWorkItemUserToMember(workItem.fields['System.AssignedTo']);
@@ -782,7 +784,7 @@ export function fromAzureWorkItem(
 		undefined,
 		workItem.fields['System.CommentCount'],
 		undefined,
-		getAzureWorkItemDescription(workItem.fields, htmlFields)?.value,
+		description?.value,
 		project,
 		undefined,
 		workItem.fields['System.WorkItemType'],
@@ -792,6 +794,7 @@ export function fromAzureWorkItem(
 		undefined,
 		toWorkItemIterations(workItem.fields['System.IterationPath']),
 		projection,
+		description != null ? toIssueBodyField(description.field) : undefined,
 	);
 }
 
@@ -872,7 +875,6 @@ export function fromAzureWorkItemToProviderIssue(
 	const tags = fields['System.Tags'];
 	const state = fields['System.State'];
 	const type = fields['System.WorkItemType'];
-	const description = getAzureWorkItemDescription(fields, htmlFields);
 	return {
 		id: id.toString(),
 		number: id.toString(),
@@ -884,8 +886,7 @@ export function fromAzureWorkItemToProviderIssue(
 		updatedDate: parseAzureWorkItemDate(fields['System.ChangedDate']),
 		url: typeof url === 'string' ? url : null,
 		assignees: assignee != null ? [assignee] : [],
-		description: description?.value ?? null,
-		...(description != null ? { descriptionField: description.field } : {}),
+		...toAzureWorkItemDescriptionFields(fields, htmlFields),
 		state: typeof state === 'string' && state ? { name: state, color: null } : null,
 		type: typeof type === 'string' ? type : null,
 		iteration: toAzureWorkItemIteration(fields['System.IterationPath']),
@@ -899,6 +900,17 @@ export function fromAzureWorkItemToProviderIssue(
 			id: null,
 			name: tag.trim(),
 		})),
+	};
+}
+
+export function toAzureWorkItemDescriptionFields(
+	fields: Readonly<Record<string, unknown>> | null | undefined,
+	htmlFields?: readonly AzureWorkItemHtmlField[],
+): Pick<ProviderIssue, 'description' | 'descriptionField'> {
+	const description = getAzureWorkItemDescription(fields, htmlFields);
+	return {
+		description: description?.value ?? null,
+		...(description != null ? { descriptionField: description.field } : {}),
 	};
 }
 
@@ -1010,6 +1022,7 @@ export function toAzureWorkItemEtagFields(
 	return {
 		state: state,
 		updatedDate: updatedDate,
+		descriptionRule: azureWorkItemDescriptionRule,
 	};
 }
 

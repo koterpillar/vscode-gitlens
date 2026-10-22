@@ -564,22 +564,25 @@ export class AzureDevOpsApi implements Disposable {
 			);
 			const issueType = issueResult.fields['System.WorkItemType'];
 			const state = issueResult.fields['System.State'];
-			const stateCategory = await this.getWorkItemStateCategory(
-				issueType,
-				state,
-				provider,
-				token,
-				project.resourceName,
-				project.name,
-				options,
-			);
-			const htmlFields = await this.getWorkItemHtmlFields(
-				provider,
-				token,
-				project.resourceName,
-				options.baseUrl,
-				issueResult.fields,
-			);
+			const [stateCategory, htmlFields] = await Promise.all([
+				this.getWorkItemStateCategory(
+					issueType,
+					state,
+					provider,
+					token,
+					project.resourceName,
+					project.name,
+					options,
+				),
+				this.getWorkItemHtmlFields(
+					provider,
+					token,
+					project.resourceName,
+					options.baseUrl,
+					issueResult.fields,
+					scope,
+				),
+			]);
 			return fromAzureWorkItem(issueResult, provider, project, stateCategory, 'point', htmlFields);
 		}
 
@@ -1120,6 +1123,7 @@ export class AzureDevOpsApi implements Disposable {
 					collection,
 					options.baseUrl,
 					workItem.fields,
+					scope,
 					cancellation,
 				);
 				values.push(fromAzureWorkItem(workItem, provider, project, stateCategory, 'search', htmlFields));
@@ -1534,40 +1538,48 @@ export class AzureDevOpsApi implements Disposable {
 		}
 	}
 
-	private getWorkItemHtmlFields(
+	private async getWorkItemHtmlFields(
 		provider: Provider,
 		token: TokenWithInfo,
 		namespace: string,
 		baseUrl: string,
 		fields: WorkItem['fields'],
+		scope: ScopedLogger | undefined,
 		cancellation?: AbortSignal,
 	): Promise<readonly AzureWorkItemHtmlField[]> {
-		const requestToken = { ...token };
-		return this._workItemDescriptions.getFields(
-			fields,
-			{ baseUrl: baseUrl, namespace: namespace, token: requestToken.accessToken, isPAT: true },
-			async signal => {
-				const resource = await this.requireRestResource(
-					provider,
-					requestToken,
-					namespace,
-					baseUrl,
-					'fields',
-					'6.0',
-					signal,
-				);
-				return this.request(
-					provider,
-					requestToken,
-					baseUrl,
-					`${encodeAzurePathSegment(namespace)}/_apis/wit/fields?api-version=${resource.apiVersion}`,
-					{ method: 'GET' },
-					undefined,
-					signal,
-				);
-			},
-			cancellation,
-		);
+		try {
+			const requestToken = { ...token };
+			return await this._workItemDescriptions.getFields(
+				fields,
+				{ baseUrl: baseUrl, namespace: namespace, token: requestToken.accessToken, isPAT: true },
+				async signal => {
+					const resource = await this.requireRestResource(
+						provider,
+						requestToken,
+						namespace,
+						baseUrl,
+						'fields',
+						'6.0',
+						signal,
+					);
+					return this.request(
+						provider,
+						requestToken,
+						baseUrl,
+						`${encodeAzurePathSegment(namespace)}/_apis/wit/fields?api-version=${resource.apiVersion}`,
+						{ method: 'GET' },
+						undefined,
+						signal,
+					);
+				},
+				cancellation,
+			);
+		} catch (ex) {
+			if (isCancellationError(ex) && cancellation?.aborted) throw ex;
+
+			scope?.warn(`Unable to read the Azure DevOps field catalog of '${namespace}': ${ex}`);
+			return [];
+		}
 	}
 
 	private async getRestResource(

@@ -314,9 +314,9 @@ reads, and is `undefined` elsewhere), `reviewDecision`, `assignees`, `checks` (`
 (`mergeableState`), `diffStats` (`additions`, `deletions`, `filesChanged`), `commitCount`, `comments` (`commentsCount`),
 `reactions` (`thumbsUpCount`), `access` (`viewerCanUpdate` and `repository.accessLevel`), `authoredByMe` (with `viewer`,
 the identity it was matched against) and `stack`. `statusCheckRollupState`, `commitCount` and `viewerCanUpdate` live on
-the `PullRequest` class every row is, not on the `PullRequestShape` type. Issue groups: `description` (`body`),
-`assignees`, `labels`, `comments` (`commentsCount`), `reactions` (`thumbsUpCount`) and `access`
-(`repository.accessLevel`).
+the `PullRequest` class every row is, not on the `PullRequestShape` type. Issue groups: `description` (`body`, and
+`bodyField` where the provider sets it, so take both from the same row), `assignees`, `labels`, `comments`
+(`commentsCount`), `reactions` (`thumbsUpCount`) and `access` (`repository.accessLevel`).
 
 Each table below covers a cloud host and its self-managed variant: where a cell reads `cloud / self-managed` the two
 differ, and `—` means that host never produces the tag.
@@ -1348,15 +1348,21 @@ while GitHub, GitLab, and Linear descriptions are Markdown. Jira issues therefor
 `bodyFormat: 'jira-wiki'`; an omitted `bodyFormat` means consumers should preserve the existing behavior and treat
 `body` as Markdown. The `'markdown'` value is reserved for providers that need to make that format explicit.
 
-Two exceptions carry HTML with `bodyFormat` omitted: Azure DevOps work item descriptions and Bitbucket
-Cloud issues (`content.html`). Their `bodyFormat` is left unset rather than changed, so check the provider before
-treating either as Markdown.
+Two exceptions carry HTML with `bodyFormat` omitted: Azure DevOps work items and Bitbucket Cloud issues
+(`content.html`). Their `bodyFormat` is left unset rather than changed, so check the provider before treating either
+as Markdown.
 
-Azure work item lists, direct point reads and search hydration use the SDK's shared description selector:
-Description, Repro Steps, Acceptance Criteria and Symptom first, then additional HTML fields declared by the
-collection's field catalog. The catalog is optional; an unavailable catalog leaves the built-in fields available.
-An empty Description is preserved when no field has visible content. Direct reads share a catalog cache scoped
-to the installation, collection, credential and authentication mode, cleared on HTTP proxy changes.
+An Azure DevOps work item's body is its first rich text field with content: `System.Description`, then the built-in
+description fields (`Microsoft.VSTS.TCM.ReproSteps`, `Microsoft.VSTS.Common.AcceptanceCriteria`,
+`Microsoft.VSTS.CMMI.Symptom`), then additional HTML fields declared by the organization's field catalog, custom fields
+first. Every read uses provider-apis' shared selector. `bodyField` names the selected field
+(`{ id: 'Microsoft.VSTS.TCM.ReproSteps', name: 'Repro Steps' }`) so a host can label the body; it is absent when no body
+is available and for other providers. The catalog is read only when no built-in field describes the work item, and
+kept for an hour per organization, credential and client (provider-apis keeps its own for list rows). An unavailable
+or malformed catalog leaves the body to the built-in fields rather than failing the work item; the caller's
+cancellation still propagates.
+An empty Description is preserved when no field has visible content. Direct reads share a catalog cache scoped to
+the installation, collection, credential and authentication mode, cleared on HTTP proxy changes.
 
 Rendering and conversion remain consumer concerns. In particular, the Jira body is neither ADF nor converted to
 Markdown by this package.
