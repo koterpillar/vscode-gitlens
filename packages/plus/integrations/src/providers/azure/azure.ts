@@ -258,10 +258,10 @@ export class AzureDevOpsApi implements Disposable {
 	): Promise<PullRequest | undefined> {
 		const scope = getScopedLogger();
 		const { projectName, repoName } = parseAzureRepositoryDescriptor(repo);
+		const resource = await this.requireRestResource(provider, token, owner, baseUrl, 'pullRequestQuery', '4.1');
 		try {
 			const encodedProject = encodeAzurePathSegment(projectName);
 			const encodedRepo = encodeAzurePathSegment(repoName);
-			const resource = await this.requireRestResource(provider, token, owner, baseUrl, 'pullRequestQuery', '4.1');
 			const prResult = await this.request<{ results: Record<string, AzurePullRequest[]>[] }>(
 				provider,
 				token,
@@ -378,9 +378,26 @@ export class AzureDevOpsApi implements Disposable {
 		const { projectName, repoName } = parseAzureRepositoryDescriptor(repo);
 
 		if (options?.type === undefined || options?.type === 'issue') {
+			const resource = await this.requireRestResource(
+				provider,
+				token,
+				owner,
+				options.baseUrl,
+				'workItems',
+				'6.0',
+			);
 			let issueResult: WorkItem | undefined;
 			try {
-				issueResult = await this.getWorkItem(provider, token, owner, projectName, id, options.baseUrl, scope);
+				issueResult = await this.getWorkItem(
+					provider,
+					token,
+					owner,
+					projectName,
+					id,
+					options.baseUrl,
+					resource,
+					scope,
+				);
 			} catch (ex) {
 				// A rejected credential is actionable and must not be reported as an absent issue; every other
 				// non-404 keeps the existing degrade-to-undefined behavior.
@@ -495,6 +512,14 @@ export class AzureDevOpsApi implements Disposable {
 		},
 	): Promise<Issue | undefined> {
 		const scope = getScopedLogger();
+		const resource = await this.requireRestResource(
+			provider,
+			token,
+			project.resourceName,
+			options.baseUrl,
+			'workItems',
+			'6.0',
+		);
 
 		let issueResult: WorkItem | undefined;
 		try {
@@ -505,6 +530,7 @@ export class AzureDevOpsApi implements Disposable {
 				project.name,
 				id,
 				options.baseUrl,
+				resource,
 				scope,
 			);
 		} catch (ex) {
@@ -806,6 +832,7 @@ export class AzureDevOpsApi implements Disposable {
 		cancellation?: AbortSignal,
 	): Promise<RepositoryMetadata | undefined> {
 		const scope = getScopedLogger();
+		const resource = await this.requireRestResource(provider, token, owner, options.baseUrl, 'repositories', '7.1');
 
 		try {
 			const response = await this.getRepository(
@@ -814,6 +841,7 @@ export class AzureDevOpsApi implements Disposable {
 				owner,
 				repo,
 				options.baseUrl,
+				resource.apiVersion,
 				scope,
 				cancellation,
 			);
@@ -865,6 +893,7 @@ export class AzureDevOpsApi implements Disposable {
 		cancellation?: AbortSignal,
 	): Promise<DefaultBranch | undefined> {
 		const scope = getScopedLogger();
+		const resource = await this.requireRestResource(provider, token, owner, options.baseUrl, 'repositories', '7.1');
 
 		try {
 			const response = await this.getRepository(
@@ -873,6 +902,7 @@ export class AzureDevOpsApi implements Disposable {
 				owner,
 				repo,
 				options.baseUrl,
+				resource.apiVersion,
 				scope,
 				cancellation,
 			);
@@ -1267,18 +1297,18 @@ export class AzureDevOpsApi implements Disposable {
 		owner: string,
 		repo: string,
 		baseUrl: string,
+		apiVersion: string,
 		scope: ScopedLogger | undefined,
 		cancellation?: AbortSignal,
 	): Promise<AzureRepositoryWithMetadata | undefined> {
 		const { projectName, repoName } = parseAzureRepositoryDescriptor(repo);
 		const encodedProject = encodeAzurePathSegment(projectName);
 		const encodedRepo = encodeAzurePathSegment(repoName);
-		const resource = await this.requireRestResource(provider, token, owner, baseUrl, 'repositories', '7.1');
 		return this.request<AzureRepositoryWithMetadata>(
 			provider,
 			token,
 			baseUrl,
-			`${encodeAzurePathSegment(owner)}/${encodedProject}/_apis/git/repositories/${encodedRepo}?api-version=${resource.apiVersion}`,
+			`${encodeAzurePathSegment(owner)}/${encodedProject}/_apis/git/repositories/${encodedRepo}?api-version=${apiVersion}`,
 			{ method: 'GET' },
 			scope,
 			cancellation,
@@ -1407,11 +1437,11 @@ export class AzureDevOpsApi implements Disposable {
 		project: string,
 		id: string,
 		baseUrl: string,
+		resource: AzureDevOpsRestResourceInfo,
 		scope: ScopedLogger | undefined,
 	): Promise<WorkItem | undefined> {
 		const encodedProject = encodeAzurePathSegment(project);
 		const encodedId = encodeAzurePathSegment(id);
-		const resource = await this.requireRestResource(provider, token, owner, baseUrl, 'workItems', '6.0');
 		const projectPath = resource.projectScoped ? `/${encodedProject}` : '';
 		return this.request<WorkItem>(
 			provider,
@@ -1516,7 +1546,16 @@ export class AzureDevOpsApi implements Disposable {
 		resource: AzureDevOpsRestResource,
 		version: string,
 	): Promise<AzureDevOpsRestResourceInfo> {
-		const result = await this.getRestResource(provider, token, namespace, baseUrl, resource, version);
+		let result: AzureDevOpsRestResourceInfo | undefined;
+		try {
+			result = await this.getRestResource(provider, token, namespace, baseUrl, resource, version);
+		} catch (ex) {
+			if (ex instanceof RequestNotFoundError) {
+				throw new Error('Azure DevOps REST resource discovery failed', { cause: ex });
+			}
+
+			throw ex;
+		}
 		if (result == null) throw new Error(`Azure DevOps REST resource ${resource} is unavailable`);
 
 		return result;
