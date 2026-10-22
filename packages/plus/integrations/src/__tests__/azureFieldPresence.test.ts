@@ -10,6 +10,7 @@ import type { FieldPresence, IssueFieldGroup, PullRequestFieldGroup } from '../f
 import { getIssueFieldPresence, getPullRequestFieldPresence } from '../fieldPresence.js';
 import { createIntegrationService } from '../integrationService.js';
 import type { GitHostIntegration } from '../models/gitHostIntegration.js';
+import { azureRestDiscoveryResponse } from '../providers/azure/__tests__/fixtures.js';
 import type { FakeRuntime } from './fakeRuntime.js';
 import { createFakeRuntime } from './fakeRuntime.js';
 import { assertIssuePresence, assertPullRequestPresence } from './fieldPresenceHelpers.js';
@@ -222,6 +223,9 @@ async function connectedServices(): Promise<Connected> {
 	bypassPointReadCache(runtime);
 	const base = `https://dev.azure.com/${org}`;
 	runtime.http.fetch = (input, init) => {
+		const discovery = azureRestDiscoveryResponse(input);
+		if (discovery != null) return Promise.resolve(discovery);
+
 		const url = new URL(input.toString());
 		if (url.hostname === 'app.vssps.visualstudio.com') {
 			if (url.pathname.endsWith('/profile/profiles/me')) {
@@ -280,6 +284,9 @@ async function connectedServer(): Promise<Connected> {
 		return json({ data: { ...descriptor, accessToken: `${me}-token`, expiresIn: 3600, scopes: '' } });
 	};
 	runtime.http.fetch = (input, init) => {
+		const discovery = azureRestDiscoveryResponse(input);
+		if (discovery != null) return Promise.resolve(discovery);
+
 		const url = new URL(input.toString());
 		const segments = url.pathname
 			.slice('/tfs'.length)

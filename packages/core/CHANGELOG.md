@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixes REST version and work item route failures on TFS 2018 for native issue, pull request and reviewer-group reads. Work item categories use explicit server metadata; unavailable categories keep list results partial and exact state-filtered searches unsupported ([#6048](https://github.com/gitkraken/vscode-gitlens/issues/6048)).
+
 ## [0.15.4] - 2026-10-22
 
 ### Added
