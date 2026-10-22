@@ -1,3 +1,5 @@
+import type { AzureWorkItemHtmlField } from '@gitkraken/provider-apis';
+import { getAzureWorkItemDescription } from '@gitkraken/provider-apis';
 import type { IssueIteration, IssueMember, IssueProjection, IssueProviderState } from '@gitlens/git/models/issue.js';
 import { Issue } from '@gitlens/git/models/issue.js';
 import type { IssueOrPullRequestState } from '@gitlens/git/models/issueOrPullRequest.js';
@@ -757,6 +759,7 @@ export function fromAzureWorkItem(
 	project: AzureProjectDescriptor,
 	stateCategory?: AzureWorkItemStateCategory,
 	projection?: IssueProjection,
+	htmlFields?: readonly AzureWorkItemHtmlField[],
 ): Issue {
 	const state = workItem.fields['System.State'];
 	const closedDate = parseAzureWorkItemDate(workItem.fields['Microsoft.VSTS.Common.ClosedDate']) ?? undefined;
@@ -779,7 +782,7 @@ export function fromAzureWorkItem(
 		undefined,
 		workItem.fields['System.CommentCount'],
 		undefined,
-		workItem.fields['System.Description'],
+		getAzureWorkItemDescription(workItem.fields, htmlFields)?.value,
 		project,
 		undefined,
 		workItem.fields['System.WorkItemType'],
@@ -845,6 +848,7 @@ export function fromAzureWorkItemToProviderIssue(
 	workItem: AzureWorkItemResponse,
 	namespace: string,
 	project: string,
+	htmlFields?: readonly AzureWorkItemHtmlField[],
 ): ProviderIssue | undefined {
 	const fields = workItem.fields;
 	const id = workItem.id;
@@ -868,7 +872,7 @@ export function fromAzureWorkItemToProviderIssue(
 	const tags = fields['System.Tags'];
 	const state = fields['System.State'];
 	const type = fields['System.WorkItemType'];
-	const description = fields['System.Description'];
+	const description = getAzureWorkItemDescription(fields, htmlFields);
 	return {
 		id: id.toString(),
 		number: id.toString(),
@@ -880,7 +884,8 @@ export function fromAzureWorkItemToProviderIssue(
 		updatedDate: parseAzureWorkItemDate(fields['System.ChangedDate']),
 		url: typeof url === 'string' ? url : null,
 		assignees: assignee != null ? [assignee] : [],
-		description: typeof description === 'string' ? description : null,
+		description: description?.value ?? null,
+		...(description != null ? { descriptionField: description.field } : {}),
 		state: typeof state === 'string' && state ? { name: state, color: null } : null,
 		type: typeof type === 'string' ? type : null,
 		iteration: toAzureWorkItemIteration(fields['System.IterationPath']),
@@ -979,7 +984,11 @@ export function toAzureWorkItemEtagFields(
 ): IssueEtagFields {
 	const fields = workItem.fields;
 	const teamProject = fields?.['System.TeamProject'];
-	if (typeof teamProject === 'string' && teamProject.toLowerCase() !== project.toLowerCase()) {
+	if (typeof teamProject !== 'string' || !teamProject.trim()) {
+		throw new Error(`Azure DevOps work item ${String(workItem.id)} has no project`);
+	}
+
+	if (teamProject.toLowerCase() !== project.toLowerCase()) {
 		throw new Error(
 			`Azure DevOps work item ${String(workItem.id)} is in project '${teamProject}', not '${project}'`,
 		);
